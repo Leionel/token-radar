@@ -10,7 +10,24 @@ wrapped, staked or bridged product of a token that already trades, ranks them by
 value the model derives from the snapshot's own figures, and writes a static dashboard with a
 concrete farm plan for every row.
 
-## The model (radar-2)
+## The model (radar-4)
+
+The value formula is unchanged from radar-2. Radar-3 made the farm plans
+concrete: every step's gas is the chain's own (an Ethereum transaction costs
+dollars, a Solana one cents), the first step names the chain and the capital,
+and the rewards step names the kind of reward the protocol's category earns.
+Radar-4 fixes what a careful read of the radar-3 plans found: CDP protocols
+get their own plan (lock collateral, mint the stable asset) instead of the
+lending plan's supply-and-borrow steps, and CDP managers get a manager's plan
+(open the position through the manager, automate repayments); the second and
+weekly actions now name a dollar figure instead of "a small amount"; the gas
+table covers the cheap chains the board actually runs on (Hyperliquid, Monad,
+Stellar, Flare and the rest no longer fall in the $1 default); the
+methodology panel's fallback count is over rows, not categories, and its
+table lists every category on the board with its row count so the count is
+auditable; and the spotlight cards follow the table's filter. The methodology
+panel states how much of the board rests on the global median and computes
+its example multiples from the snapshot instead of writing them in.
 
 ```
 implied = round( tvl × catMult × sizeMult × growthMult × maturityMult × chainMult )
@@ -39,7 +56,8 @@ pre-token protocols below the $50M floor, by the same rule the watchlist uses �
 on record, and not a wrapped, staked or bridged product of a token that already trades.
 Live-token protocols are set aside in their own tab with their market caps, never mixed
 into the ranking. Every row carries an 8-step farm plan derived from its category,
-chains, TVL and age, with a cost and a time on each step.
+chains, TVL and age, with a cost and a time on each step; the gas on each step is
+the chain's own, and the rewards step names the kind of reward that category earns.
 
 ## Run it
 
