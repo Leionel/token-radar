@@ -1,4 +1,4 @@
-// The token radar's model (radar-2): one snapshot of the protocol universe in, one ranked
+// The token radar's model (radar-4): one snapshot of the protocol universe in, one ranked
 // board out.
 //
 // The board is every protocol that records no token AND is not a wrapped, staked or bridged
@@ -104,7 +104,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-4';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -393,12 +393,72 @@ function chainOf(p: SnapshotProtocol): string {
   return p.chains.length > 0 ? p.chains[0]! : 'its main chain';
 }
 
+/**
+ * What one transaction costs on a chain, in whole dollars, as the farm plan states
+ * it. A flat gas figure would be wrong on its face: a Solana transaction costs cents
+ * and an Ethereum one costs dollars, so the plan prices the chain the protocol
+ * actually runs on. The figures are rough, stated as "about", and matched on the
+ * chain's words, never on a protocol's name.
+ */
+export function gasFor(chain: string): number {
+  const c = chain.toLowerCase();
+  if (c.includes('ethereum')) return 8;
+  if (c.includes('solana')) return 0.05;
+  if (c.includes('sui') || c.includes('aptos')) return 0.05;
+  if (
+    c.includes('hyperliquid') || c.includes('monad') || c.includes('stellar') ||
+    c.includes('flare') || c.includes('provenance') || c.includes('arc') ||
+    c.includes('plasma') || c.includes('algorand') || c.includes('ripple')
+  ) return 0.05;
+  if (c.includes('binance')) return 0.3;
+  if (c.includes('tron')) return 1.5;
+  if (c.includes('polygon')) return 0.1;
+  if (c.includes('bitcoin')) return 2;
+  if (c.includes('avalanche')) return 0.5;
+  if (
+    c.includes('base') || c.includes('arbitrum') || c.includes('optimism') ||
+    c.includes('zksync') || c.includes('linea') || c.includes('scroll') ||
+    c.includes('blast') || c.includes('mode') || c.includes('ink') ||
+    c.includes('world chain') || c.includes('unichain') || c.includes('soneium') ||
+    c.includes('zora') || c.includes('mantle') || c.includes('manta') ||
+    c.includes('taiko') || c.includes('zircuit') || c.includes('zklink') ||
+    c.includes('fraxtal') || c.includes('lisk') || c.includes('metis') ||
+    c.includes('swellchain') || c.includes('sophon') || c.includes('katana') ||
+    c.includes('hemi') || c.includes('corn') || c.includes('op_bnb') ||
+    c.includes('robinhood') || c.includes('rise') || c.includes('starknet') ||
+    c.includes('berachain') ||
+    c.includes('x layer') || c.includes('polygon zkevm')
+  ) return 0.5;
+  return 1;
+}
+
+/** A gas figure as the plan writes it: $8, $1.50, $0.50, $0.05. */
+export function gasText(gas: number): string {
+  if (gas >= 1) return `$${Number.isInteger(gas) ? String(gas) : gas.toFixed(2)}`;
+  return `$${gas.toFixed(2)}`;
+}
+
 /** How much capital one farm position needs, from the protocol's own TVL. */
 function capitalFor(p: SnapshotProtocol): number {
   if (p.tvl_usd >= 5_000_000_000) return 250;
   if (p.tvl_usd >= 1_000_000_000) return 150;
   if (p.tvl_usd >= 100_000_000) return 100;
   return 50;
+}
+
+/**
+ * The second action's amount: a slice of the capital, so the plan names a figure
+ * instead of "a small amount". $50 of a $250 or $150 position, $30 of $100, $20 of $50.
+ */
+function secondAmountFor(capital: number): number {
+  if (capital >= 150) return 50;
+  if (capital >= 100) return 30;
+  return 20;
+}
+
+/** The weekly top-up's amount: $10 a week on a $100+ position, $5 on a $50 one. */
+function weeklyAmountFor(capital: number): number {
+  return capital >= 100 ? 10 : 5;
 }
 
 /** How long to hold, from the protocol's age: younger protocols get a longer window. */
@@ -411,22 +471,37 @@ function holdDaysFor(age: number | null): number {
 
 /**
  * A protocol's two category actions: the main position and a second qualifying action.
- * Matched on the category's words, never on a name. The order matters: 'bridge' is
- * checked before 'chain', so a cross-chain bridge is a bridge, not a chain.
+ * Matched on the category's words, never on a name. The order matters: 'cdp manager'
+ * is checked before 'cdp' before 'lend', so a CDP manager is a manager and a CDP is a
+ * mint, not a supply market; 'bridge' is checked before 'chain', so a cross-chain
+ * bridge is a bridge, not a chain.
  */
 function actionsFor(p: SnapshotProtocol, capital: number, chain: string): [string, string] {
   const c = (p.category ?? '').toLowerCase();
   const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) {
+  const second = secondAmountFor(capital);
+  if (c.includes('cdp manager')) {
+    return [
+      `Open a collateralized debt position through ${name} on ${chain}: deposit collateral and mint the stable asset.`,
+      `Use ${name} to automate repayments and set liquidation protection on the position.`,
+    ];
+  }
+  if (c.includes('cdp')) {
+    return [
+      `Lock $${capital} of collateral in ${name} on ${chain} and mint its stable asset against it.`,
+      `Provide the minted stable asset as liquidity in a second protocol on ${chain}.`,
+    ];
+  }
+  if (c.includes('lend') || c.includes('collateral')) {
     return [
       `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.`,
-      `Borrow a small amount against the supply, then repay it, so the account shows both sides of the market.`,
+      `Borrow $${second} against the supply, then repay it, so the account shows both sides of the market.`,
     ];
   }
   if (c.includes('dex') || c.includes('yield') || c.includes('liquidity manager') || c.includes('leveraged farm') || c.includes('farm')) {
     return [
       `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`,
-      `Swap a second pair on ${name} and add a small amount to a second pool.`,
+      `Swap a second pair on ${name} and add $${second} to a second pool.`,
     ];
   }
   if (c.includes('bridge')) {
@@ -450,13 +525,13 @@ function actionsFor(p: SnapshotProtocol, capital: number, chain: string): [strin
   if (c.includes('prediction')) {
     return [
       `Fund $${capital} on ${name} and place one position in an active market.`,
-      `Place a second position in a different market and let both run to resolution.`,
+      `Place a second $${second} position in a different market and let both run to resolution.`,
     ];
   }
   if (c.includes('curator') || c.includes('allocator')) {
     return [
       `Deposit $${capital} into a ${name} vault on ${chain} and keep the vault shares.`,
-      `Allocate a small amount to a second ${name} vault with a different risk profile.`,
+      `Allocate $${second} to a second ${name} vault with a different risk profile.`,
     ];
   }
   if (c.includes('stable')) {
@@ -479,32 +554,32 @@ function actionsFor(p: SnapshotProtocol, capital: number, chain: string): [strin
   }
   if (c.includes('chain')) {
     return [
-      `Bridge $${capital} of USDC onto ${chain} and use it in the chain's flagship app.`,
-      `Try a second app on ${chain} with a small amount so the wallet touches more than one contract.`,
+      `Bridge $${capital} of USDC onto ${chain} and use it in ${name}'s app on ${chain}.`,
+      `Try a second app on ${chain} with $${second} so the wallet touches more than one contract.`,
     ];
   }
   if (c.includes('payment') || c.includes('card')) {
     return [
       `Fund $${capital} into your ${name} account on ${chain} and make one payment with it.`,
-      `Make a second payment to a different merchant so the account shows repeat use.`,
+      `Make a second $${second} payment to a different merchant so the account shows repeat use.`,
     ];
   }
   if (c.includes('governance')) {
     return [
       `Deposit $${capital} into ${name} on ${chain} and vote in its next governance round.`,
-      `Delegate a small amount of voting power and take part in one proposal discussion.`,
+      `Delegate $${second} of voting power and take part in one proposal discussion.`,
     ];
   }
   if (c.includes('index')) {
     return [
       `Buy $${capital} of ${name}'s index tokens on ${chain} and hold them.`,
-      `Rebalance once: sell a small slice and buy back into the index at the new weights.`,
+      `Rebalance once: sell a $${second} slice and buy back into the index at the new weights.`,
     ];
   }
   if (c.includes('cedefi')) {
     return [
       `Deposit $${capital} into ${name}'s vault on ${chain} and keep the position open.`,
-      `Move a small amount into a second ${name} product with a different yield source.`,
+      `Move $${second} into a second ${name} product with a different yield source.`,
     ];
   }
   if (c.includes('otc')) {
@@ -532,7 +607,9 @@ function actionsFor(p: SnapshotProtocol, capital: number, chain: string): [strin
  */
 function positionFor(p: SnapshotProtocol): string {
   const c = (p.category ?? '').toLowerCase();
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return 'supply position';
+  if (c.includes('cdp manager')) return 'managed CDP position';
+  if (c.includes('cdp')) return 'minted stable asset';
+  if (c.includes('lend') || c.includes('collateral')) return 'supply position';
   if (c.includes('dex') || c.includes('yield') || c.includes('liquidity manager') || c.includes('leveraged farm') || c.includes('farm')) return 'liquidity position';
   if (c.includes('bridge')) return 'bridged funds';
   if (c.includes('staking') || c.includes('restak')) return 'staked position';
@@ -556,13 +633,16 @@ function positionFor(p: SnapshotProtocol): string {
 function weeklyFor(p: SnapshotProtocol, capital: number, chain: string): string {
   const c = (p.category ?? '').toLowerCase();
   const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Top up the ${name} supply by a small amount each week and check the borrow rate.`;
-  if (c.includes('dex') || c.includes('yield') || c.includes('liquidity manager') || c.includes('leveraged farm') || c.includes('farm')) return `Add a small amount to the ${name} pool each week and claim any fees the position earns.`;
-  if (c.includes('bridge')) return `Bridge a small amount through ${name} each week instead of moving funds in one go.`;
+  const weekly = weeklyAmountFor(capital);
+  if (c.includes('cdp manager')) return `Check the ${name} dashboard each week and adjust the position's health factor.`;
+  if (c.includes('cdp')) return `Check the collateral ratio and the peg once a week; top up the collateral if the ratio falls.`;
+  if (c.includes('lend') || c.includes('collateral')) return `Top up the ${name} supply by $${weekly} each week and check the borrow rate.`;
+  if (c.includes('dex') || c.includes('yield') || c.includes('liquidity manager') || c.includes('leveraged farm') || c.includes('farm')) return `Add $${weekly} to the ${name} pool each week and claim any fees the position earns.`;
+  if (c.includes('bridge')) return `Bridge $${weekly} through ${name} each week instead of moving funds in one go.`;
   if (c.includes('staking') || c.includes('restak')) return `Claim the staking rewards each week and restake them through ${name}.`;
   if (c.includes('perpetual') || c.includes('derivative') || c.includes('basis')) return `Roll the ${name} hedge once a week so the margin position stays active.`;
   if (c.includes('prediction')) return `Place one new position a week in a fresh ${name} market and let the old ones resolve.`;
-  if (c.includes('curator') || c.includes('allocator')) return `Add a small amount to the ${name} vault each week and check the vault's yield.`;
+  if (c.includes('curator') || c.includes('allocator')) return `Add $${weekly} to the ${name} vault each week and check the vault's yield.`;
   if (c.includes('stable')) return `Use the ${name} stable asset once a week instead of letting it sit idle.`;
   if (c.includes('rwa')) return `Check the ${name} yield payout each week and keep the asset held through it.`;
   if (c.includes('insurance')) return `Check the ${name} cover once a week and keep the policy active through its term.`;
@@ -570,56 +650,88 @@ function weeklyFor(p: SnapshotProtocol, capital: number, chain: string): string 
   if (c.includes('payment') || c.includes('card')) return `Make one payment a week from the ${name} account so the account shows repeat use.`;
   if (c.includes('governance')) return `Vote in each ${name} governance round as it opens, week by week.`;
   if (c.includes('index')) return `Check the ${name} index weights each week and rebalance a small slice when they move.`;
-  if (c.includes('cedefi')) return `Move a small amount between ${name} products each week so the account shows more than one yield source.`;
+  if (c.includes('cedefi')) return `Move $${weekly} between ${name} products each week so the account shows more than one yield source.`;
   if (c.includes('otc')) return `Complete one small OTC trade a week on ${name} at a different size each time.`;
   if (c.includes('btc')) return `Lend the BTC-backed asset for a week at a time and renew the loan through ${name}.`;
   return `Repeat the qualifying action in ${name} each week, a deposit, a swap or a vote, and leave the position open.`;
 }
 
 /**
+ * What a protocol's rewards are called, by category: the step that checks them names
+ * the same kind of reward the plan's position earns. Same category order as
+ * actionsFor, so the three never disagree about what a protocol is.
+ */
+function rewardsFor(p: SnapshotProtocol): string {
+  const c = (p.category ?? '').toLowerCase();
+  if (c.includes('cdp manager')) return 'automation savings';
+  if (c.includes('cdp')) return 'liquidity mining and fee rewards';
+  if (c.includes('lend') || c.includes('collateral')) return 'supply and borrow rewards';
+  if (c.includes('dex') || c.includes('yield') || c.includes('liquidity manager') || c.includes('leveraged farm') || c.includes('farm')) return 'liquidity mining and fee rewards';
+  if (c.includes('bridge')) return 'bridge fee rebates';
+  if (c.includes('staking') || c.includes('restak')) return 'staking yield';
+  if (c.includes('perpetual') || c.includes('derivative') || c.includes('basis')) return 'trading fee rebates';
+  if (c.includes('prediction')) return 'market payouts';
+  if (c.includes('curator') || c.includes('allocator')) return 'vault yield';
+  if (c.includes('stable')) return 'stability fees';
+  if (c.includes('rwa')) return 'yield payouts';
+  if (c.includes('insurance')) return 'cover rewards';
+  if (c.includes('chain')) return 'ecosystem points';
+  if (c.includes('payment') || c.includes('card')) return 'cashback';
+  if (c.includes('governance')) return 'governance rewards';
+  if (c.includes('index')) return 'index yield';
+  if (c.includes('cedefi')) return 'vault yield';
+  if (c.includes('otc')) return 'trading rebates';
+  if (c.includes('btc')) return 'BTC yield';
+  return 'points or rewards';
+}
+
+/**
  * A protocol's farm plan: eight steps, each an action with a cost and a time. The plan is
  * derived from the protocol's own record (category, chains, TVL, age), never from a
- * hand-written list of names. Only step 1 is the same for every row; steps 2-8 name
- * the protocol, its position and its own action.
+ * hand-written list of names. The first step names the chain and the capital, the gas
+ * on every step is the chain's own, and the rewards step names the kind of reward the
+ * protocol's category earns.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = chainOf(p);
   const capital = capitalFor(p);
+  const gas = gasText(gasFor(chain));
   const hold = holdDaysFor(age);
   const name = p.name;
   const [main, second] = actionsFor(p, capital, chain);
   const position = positionFor(p);
+  const rewards = rewardsFor(p);
   const weekly = weeklyFor(p, capital, chain);
   return [
     {
-      text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`,
-      cost: 'under $3 of gas for the first transaction',
+      text: `Use a fresh ${chain} wallet holding only the $${capital} you plan to farm; keep its seed phrase offline.`,
+      cost: `about ${gas} of gas for the first transaction`,
       time: '5 minutes',
     },
-    { text: main, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
-    { text: second, cost: 'about $3 of gas', time: '10 minutes' },
+    { text: main, cost: `$${capital} of capital and about ${gas} of gas`, time: '15 minutes to set up' },
+    { text: second, cost: `about ${gas} of gas`, time: '10 minutes' },
     {
       text: weekly,
-      cost: 'about $2 of gas a week',
+      cost: `about ${gas} of gas a week`,
       time: '10 minutes a week',
     },
     {
-      text: `Keep the ${name} ${position} open for at least ${hold} days so the activity is counted in more than one snapshot.`,
+      text: `Keep the ${position} open at least ${hold} days so the activity counts in more than one snapshot.`,
       cost: `the $${capital} stays in the position`,
       time: `${hold} days`,
     },
     {
-      text: `Open ${name}'s points or rewards page and check the eligibility rules for the ${position}.`,
+      text: `Open ${name}'s rewards page and check the ${rewards} for the ${position}.`,
       cost: 'no fee to check, and never pay to claim',
       time: '10 minutes',
     },
     {
-      text: `Use only links from ${name}'s official documentation and verified social accounts, and ignore direct messages offering claims.`,
+      text: `Only use ${name}'s official docs and verified accounts; ignore direct messages offering claims.`,
       cost: 'nothing',
       time: '5 minutes',
     },
     {
-      text: `Log the ${name} farm, wallet, deposit date, ${position}, amounts and transaction hashes, so you can repeat the position or unwind it.`,
+      text: `Log the wallet, deposit date, ${position}, amounts and hashes so you can repeat or unwind it.`,
       cost: 'nothing but the log',
       time: '5 minutes',
     },
