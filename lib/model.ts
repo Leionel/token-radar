@@ -1,4 +1,4 @@
-// The token radar's model (radar-4): one snapshot of the protocol universe in, one ranked
+// The token radar's model (radar-6): one snapshot of the protocol universe in, one ranked
 // board out.
 //
 // The board is every protocol that records no token AND is not a wrapped, staked or bridged
@@ -104,7 +104,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-6';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -328,6 +328,11 @@ function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
   return new Map(protocols.map((p) => [p.slug, p]));
 }
 
+/** A versioned name with its release stripped: 'Aera V3' is the Aera protocol. */
+function versionBase(name: string): string {
+  return name.replace(VERSIONED, '');
+}
+
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
   const multiples = categoryMultiples(snapshot, model);
@@ -340,8 +345,25 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   }
   // The early radar: every other protocol that passes the board's own rule, whatever its
   // size. The watchlist's floor is never the whole board.
+  //
+  // Versioned names are one protocol, not one row each: keep the largest version of
+  // each base name (Aera V3, not V2), and only when no row of the same protocol
+  // exists in the snapshot — a version with a base row is that protocol's other
+  // deployment, and stays out. A versioned name with no base row is a protocol the
+  // board would otherwise lose entirely (RocketSwap Anubis V2).
+  const names = new Set(snapshot.protocols.map((q) => q.name));
+  const versionedBest = new Map<string, SnapshotProtocol>();
   for (const p of snapshot.protocols) {
-    if (!chosen.has(p.slug) && isBoardEligible(p)) chosen.set(p.slug, p);
+    if (!isPreToken(p) || !VERSIONED.test(p.name)) continue;
+    if (p.category !== null && WRAPPED_CATEGORIES.has(p.category)) continue;
+    const base = versionBase(p.name);
+    if (names.has(base)) continue;
+    const kept = versionedBest.get(base);
+    if (kept === undefined || p.tvl_usd > kept.tvl_usd) versionedBest.set(base, p);
+  }
+  const keptVersioned = new Set([...versionedBest.values()].map((p) => p.slug));
+  for (const p of snapshot.protocols) {
+    if (!chosen.has(p.slug) && (isBoardEligible(p) || keptVersioned.has(p.slug))) chosen.set(p.slug, p);
   }
 
   const scored = [...chosen.values()].map((p) => {
@@ -388,9 +410,26 @@ export function stepText(step: FarmStep): string {
   return s;
 }
 
-/** The first chain a protocol names, or a neutral phrase. */
+/**
+ * The first chain a protocol names, or a neutral phrase. One snapshot field is
+ * corrected here, not modelled: Abstract lists Ethereum, but its apps run on
+ * Abstract Chain, so its plans name Abstract Chain and its gas. The correction
+ * changes no value — the chain multiplier counts chains, never names one — and
+ * it is stated on the dashboard's methodology panel.
+ */
 function chainOf(p: SnapshotProtocol): string {
+  if (p.slug === 'abstract') return 'Abstract Chain';
   return p.chains.length > 0 ? p.chains[0]! : 'its main chain';
+}
+
+/**
+ * A payment protocol on Bitcoin is a Lightning plan, not an account plan:
+ * Lightning has no accounts and no cashback; it has channels and routing fees.
+ * Matched on the category's words and the chain, never on a name.
+ */
+function isLightning(p: SnapshotProtocol): boolean {
+  const c = (p.category ?? '').toLowerCase();
+  return (c.includes('payment') || c.includes('card')) && chainOf(p).toLowerCase().includes('bitcoin');
 }
 
 /**
@@ -408,7 +447,13 @@ export function gasFor(chain: string): number {
   if (
     c.includes('hyperliquid') || c.includes('monad') || c.includes('stellar') ||
     c.includes('flare') || c.includes('provenance') || c.includes('arc') ||
-    c.includes('plasma') || c.includes('algorand') || c.includes('ripple')
+    c.includes('plasma') || c.includes('algorand') || c.includes('ripple') ||
+    c.includes('ronin') || c.includes('klaytn') || c.includes('stacks') ||
+    c.includes('kava') || c.includes('noble') || c.includes('proton') ||
+    c.includes('xion') || c.includes('rsk') || c.includes('bifrost') ||
+    c.includes('pharos') || c.includes('plume') || c.includes('tempo') ||
+    c.includes('stable') || c.includes('qubic') || c.includes('canton') ||
+    c.includes('strato') || c.includes('abstract')
   ) return 0.05;
   if (c.includes('binance')) return 0.3;
   if (c.includes('tron')) return 1.5;
@@ -427,7 +472,9 @@ export function gasFor(chain: string): number {
     c.includes('hemi') || c.includes('corn') || c.includes('op_bnb') ||
     c.includes('robinhood') || c.includes('rise') || c.includes('starknet') ||
     c.includes('berachain') ||
-    c.includes('x layer') || c.includes('polygon zkevm')
+    c.includes('x layer') || c.includes('polygon zkevm') ||
+    c.includes('bittensor') || c.includes('bsquared') || c.includes('mezo') ||
+    c.includes('morph') || c.includes('reya') || c.includes('fluent')
   ) return 0.5;
   return 1;
 }
@@ -473,8 +520,11 @@ function holdDaysFor(age: number | null): number {
  * A protocol's two category actions: the main position and a second qualifying action.
  * Matched on the category's words, never on a name. The order matters: 'cdp manager'
  * is checked before 'cdp' before 'lend', so a CDP manager is a manager and a CDP is a
- * mint, not a supply market; 'bridge' is checked before 'chain', so a cross-chain
- * bridge is a bridge, not a chain.
+ * mint, not a supply market; 'uncollateralized' before 'collateral' before 'lend', so
+ * a credit line is not a restaking vault; the yield vault before 'dex', so 'Indexes'
+ * (which contains 'dex') reaches the index branch; 'basis' before 'perpetual', so a
+ * basis vault is a deposit, not a margined trade; 'bridge' is checked before 'chain',
+ * so a cross-chain bridge is a bridge, not a chain.
  */
 function actionsFor(p: SnapshotProtocol, capital: number, chain: string): [string, string] {
   const c = (p.category ?? '').toLowerCase();
@@ -492,13 +542,37 @@ function actionsFor(p: SnapshotProtocol, capital: number, chain: string): [strin
       `Provide the minted stable asset as liquidity in a second protocol on ${chain}.`,
     ];
   }
-  if (c.includes('lend') || c.includes('collateral')) {
+  if (c.includes('uncollateralized')) {
+    return [
+      `Deposit $${capital} of USDC into ${name} on ${chain} and mint its yield-bearing token.`,
+      `Hold the token through one yield payout.`,
+    ];
+  }
+  if (c.includes('collateral')) {
+    return [
+      `Deposit $${capital} of collateral into a ${name} vault on ${chain} and delegate it to secure networks.`,
+      `Delegate the collateral to a second operator so the vault secures another network.`,
+    ];
+  }
+  if (c.includes('lend')) {
     return [
       `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.`,
       `Borrow $${second} against the supply, then repay it, so the account shows both sides of the market.`,
     ];
   }
-  if (c.includes('dex') || c.includes('yield') || c.includes('liquidity manager') || c.includes('leveraged farm') || c.includes('farm')) {
+  if (c.includes('yield') || c.includes('liquidity manager') || c.includes('leveraged farm')) {
+    return [
+      `Deposit $${capital} into ${name}'s vault on ${chain} and keep the receipt token.`,
+      `Add a second $${second} deposit to the vault so the position shows repeat activity.`,
+    ];
+  }
+  if (c.includes('index')) {
+    return [
+      `Buy $${capital} of ${name}'s index tokens on ${chain} and hold them.`,
+      `Rebalance once: sell a $${second} slice and buy back into the index at the new weights.`,
+    ];
+  }
+  if (c.includes('dex') || c.includes('farm')) {
     return [
       `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`,
       `Swap a second pair on ${name} and add $${second} to a second pool.`,
@@ -506,20 +580,26 @@ function actionsFor(p: SnapshotProtocol, capital: number, chain: string): [strin
   }
   if (c.includes('bridge')) {
     return [
-      `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`,
-      `Use the bridged funds in a second app on ${chain} instead of bridging straight back.`,
+      `Bridge $${capital} of USDC through ${name} to another chain and use the bridged funds in an app there.`,
+      `Use the bridged funds in a second app on the destination chain instead of bridging straight back.`,
     ];
   }
   if (c.includes('staking') || c.includes('restak')) {
     return [
-      `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt token.`,
-      `Claim the staking rewards once and restake them instead of withdrawing.`,
+      `Stake $${capital} of the chain's staking asset through ${name} and keep the position open.`,
+      `Check the staking rewards and restake any payout instead of withdrawing.`,
     ];
   }
-  if (c.includes('perpetual') || c.includes('derivative') || c.includes('basis')) {
+  if (c.includes('basis')) {
     return [
-      `Deposit $${capital} of USDC as margin on ${name} and open one small hedged position.`,
-      `Close the hedge and open a fresh one in the opposite direction with the same margin.`,
+      `Deposit $${capital} of USDC into ${name} on ${chain} and hold its yield-bearing token.`,
+      `Deposit a second $${second} and hold it through one yield payout.`,
+    ];
+  }
+  if (c.includes('perpetual') || c.includes('derivative')) {
+    return [
+      `Deposit $${capital} of USDC as margin on ${name} and open one small position.`,
+      `Close the position and open a fresh one in the opposite direction with the same margin.`,
     ];
   }
   if (c.includes('prediction')) {
@@ -530,8 +610,8 @@ function actionsFor(p: SnapshotProtocol, capital: number, chain: string): [strin
   }
   if (c.includes('curator') || c.includes('allocator')) {
     return [
-      `Deposit $${capital} into a ${name} vault on ${chain} and keep the vault shares.`,
-      `Allocate $${second} to a second ${name} vault with a different risk profile.`,
+      `Deposit $${capital} into ${name} on ${chain} and keep the receipt token.`,
+      `Allocate $${second} to a second ${name} product with a different risk profile.`,
     ];
   }
   if (c.includes('stable')) {
@@ -542,20 +622,26 @@ function actionsFor(p: SnapshotProtocol, capital: number, chain: string): [strin
   }
   if (c.includes('rwa')) {
     return [
-      `Mint $${capital} of ${name}'s yield-bearing asset on ${chain} and hold it.`,
+      `Buy or mint $${capital} of ${name}'s yield-bearing asset on ${chain} and hold it.`,
       `Check the asset's backing report and hold the position through one yield payout.`,
     ];
   }
   if (c.includes('insurance')) {
     return [
-      `Buy $${capital} of cover from ${name} on ${chain} and keep the policy active.`,
-      `Read the cover terms and confirm the policy covers the position you hold.`,
+      `Deposit $${capital} into the ${name} vault on ${chain} and keep the receipt token.`,
+      `Hold the receipt token through one premium payout.`,
     ];
   }
   if (c.includes('chain')) {
     return [
       `Bridge $${capital} of USDC onto ${chain} and use it in ${name}'s app on ${chain}.`,
       `Try a second app on ${chain} with $${second} so the wallet touches more than one contract.`,
+    ];
+  }
+  if (isLightning(p)) {
+    return [
+      `Open a Lightning channel with $${capital} on ${chain} and route one payment through it.`,
+      `Route a second $${second} payment through the same channel to a different destination.`,
     ];
   }
   if (c.includes('payment') || c.includes('card')) {
@@ -566,14 +652,8 @@ function actionsFor(p: SnapshotProtocol, capital: number, chain: string): [strin
   }
   if (c.includes('governance')) {
     return [
-      `Deposit $${capital} into ${name} on ${chain} and vote in its next governance round.`,
-      `Delegate $${second} of voting power and take part in one proposal discussion.`,
-    ];
-  }
-  if (c.includes('index')) {
-    return [
-      `Buy $${capital} of ${name}'s index tokens on ${chain} and hold them.`,
-      `Rebalance once: sell a $${second} slice and buy back into the index at the new weights.`,
+      `Lock $${capital} of BTC through ${name} on ${chain} and vote to direct emissions.`,
+      `Vote again in the next epoch to keep directing emissions.`,
     ];
   }
   if (c.includes('cedefi')) {
@@ -584,14 +664,14 @@ function actionsFor(p: SnapshotProtocol, capital: number, chain: string): [strin
   }
   if (c.includes('otc')) {
     return [
-      `Place a $${capital} OTC order on ${name} and complete one trade.`,
+      `Place a $${capital} trade on ${name} and complete it.`,
       `Complete a second trade at a different size so the account shows repeat activity.`,
     ];
   }
   if (c.includes('btc')) {
     return [
-      `Mint $${capital} of the BTC-backed asset through ${name} on ${chain} and use it in a DeFi app.`,
-      `Lend the BTC-backed asset in a second app on ${chain} for one week.`,
+      `Mint $${capital} of the BTC-backed asset through ${name} and use it in a DeFi app.`,
+      `Lend the BTC-backed asset in a second DeFi app for one week.`,
     ];
   }
   return [
@@ -609,20 +689,25 @@ function positionFor(p: SnapshotProtocol): string {
   const c = (p.category ?? '').toLowerCase();
   if (c.includes('cdp manager')) return 'managed CDP position';
   if (c.includes('cdp')) return 'minted stable asset';
-  if (c.includes('lend') || c.includes('collateral')) return 'supply position';
-  if (c.includes('dex') || c.includes('yield') || c.includes('liquidity manager') || c.includes('leveraged farm') || c.includes('farm')) return 'liquidity position';
+  if (c.includes('uncollateralized')) return 'lending position';
+  if (c.includes('collateral')) return 'restaking position';
+  if (c.includes('lend')) return 'supply position';
+  if (c.includes('yield') || c.includes('liquidity manager') || c.includes('leveraged farm')) return 'receipt token';
+  if (c.includes('index')) return 'index position';
+  if (c.includes('dex') || c.includes('farm')) return 'liquidity position';
   if (c.includes('bridge')) return 'bridged funds';
   if (c.includes('staking') || c.includes('restak')) return 'staked position';
-  if (c.includes('perpetual') || c.includes('derivative') || c.includes('basis')) return 'margin position';
+  if (c.includes('basis')) return 'yield-bearing token';
+  if (c.includes('perpetual') || c.includes('derivative')) return 'margin position';
   if (c.includes('prediction')) return 'market positions';
-  if (c.includes('curator') || c.includes('allocator')) return 'vault shares';
+  if (c.includes('curator') || c.includes('allocator')) return 'receipt token';
   if (c.includes('stable')) return 'stable-asset position';
   if (c.includes('rwa')) return 'yield-bearing asset';
-  if (c.includes('insurance')) return 'cover policy';
+  if (c.includes('insurance')) return 'vault position';
   if (c.includes('chain')) return 'on-chain position';
+  if (isLightning(p)) return 'channel balance';
   if (c.includes('payment') || c.includes('card')) return 'account balance';
   if (c.includes('governance')) return 'voting position';
-  if (c.includes('index')) return 'index position';
   if (c.includes('cedefi')) return 'vault position';
   if (c.includes('otc')) return 'trading position';
   if (c.includes('btc')) return 'BTC-backed position';
@@ -636,22 +721,27 @@ function weeklyFor(p: SnapshotProtocol, capital: number, chain: string): string 
   const weekly = weeklyAmountFor(capital);
   if (c.includes('cdp manager')) return `Check the ${name} dashboard each week and adjust the position's health factor.`;
   if (c.includes('cdp')) return `Check the collateral ratio and the peg once a week; top up the collateral if the ratio falls.`;
-  if (c.includes('lend') || c.includes('collateral')) return `Top up the ${name} supply by $${weekly} each week and check the borrow rate.`;
-  if (c.includes('dex') || c.includes('yield') || c.includes('liquidity manager') || c.includes('leveraged farm') || c.includes('farm')) return `Add $${weekly} to the ${name} pool each week and claim any fees the position earns.`;
-  if (c.includes('bridge')) return `Bridge $${weekly} through ${name} each week instead of moving funds in one go.`;
-  if (c.includes('staking') || c.includes('restak')) return `Claim the staking rewards each week and restake them through ${name}.`;
-  if (c.includes('perpetual') || c.includes('derivative') || c.includes('basis')) return `Roll the ${name} hedge once a week so the margin position stays active.`;
+  if (c.includes('uncollateralized')) return `Add $${weekly} to the position each week and check the lending yield.`;
+  if (c.includes('collateral')) return `Add $${weekly} of collateral to the vault each week and check the restaking yield.`;
+  if (c.includes('lend')) return `Top up the ${name} supply by $${weekly} each week and check the borrow rate.`;
+  if (c.includes('yield') || c.includes('liquidity manager') || c.includes('leveraged farm')) return `Add $${weekly} to the ${name} vault each week and check the yield.`;
+  if (c.includes('index')) return `Check the ${name} index weights each week and rebalance a small slice when they move.`;
+  if (c.includes('dex') || c.includes('farm')) return `Add $${weekly} to the ${name} pool each week and claim any fees the position earns.`;
+  if (c.includes('bridge')) return `Use the bridged funds in an app each week so the wallet stays active.`;
+  if (c.includes('staking') || c.includes('restak')) return `Check the staking rewards once a week and restake any payout.`;
+  if (c.includes('basis')) return `Add $${weekly} to the position each week and check the basis yield.`;
+  if (c.includes('perpetual') || c.includes('derivative')) return `Open one small position a week so the account shows repeat activity.`;
   if (c.includes('prediction')) return `Place one new position a week in a fresh ${name} market and let the old ones resolve.`;
-  if (c.includes('curator') || c.includes('allocator')) return `Add $${weekly} to the ${name} vault each week and check the vault's yield.`;
+  if (c.includes('curator') || c.includes('allocator')) return `Add $${weekly} to the position each week and check the yield.`;
   if (c.includes('stable')) return `Use the ${name} stable asset once a week instead of letting it sit idle.`;
   if (c.includes('rwa')) return `Check the ${name} yield payout each week and keep the asset held through it.`;
-  if (c.includes('insurance')) return `Check the ${name} cover once a week and keep the policy active through its term.`;
+  if (c.includes('insurance')) return `Check the cover premiums once a week and hold the receipt token.`;
   if (c.includes('chain')) return `Use one ${chain} app a week with the bridged funds so the wallet stays active on the chain.`;
+  if (isLightning(p)) return `Route one payment a week through the Lightning channel so the node stays active.`;
   if (c.includes('payment') || c.includes('card')) return `Make one payment a week from the ${name} account so the account shows repeat use.`;
   if (c.includes('governance')) return `Vote in each ${name} governance round as it opens, week by week.`;
-  if (c.includes('index')) return `Check the ${name} index weights each week and rebalance a small slice when they move.`;
   if (c.includes('cedefi')) return `Move $${weekly} between ${name} products each week so the account shows more than one yield source.`;
-  if (c.includes('otc')) return `Complete one small OTC trade a week on ${name} at a different size each time.`;
+  if (c.includes('otc')) return `Complete one small trade a week on ${name} at a different size each time.`;
   if (c.includes('btc')) return `Lend the BTC-backed asset for a week at a time and renew the loan through ${name}.`;
   return `Repeat the qualifying action in ${name} each week, a deposit, a swap or a vote, and leave the position open.`;
 }
@@ -665,23 +755,28 @@ function rewardsFor(p: SnapshotProtocol): string {
   const c = (p.category ?? '').toLowerCase();
   if (c.includes('cdp manager')) return 'automation savings';
   if (c.includes('cdp')) return 'liquidity mining and fee rewards';
-  if (c.includes('lend') || c.includes('collateral')) return 'supply and borrow rewards';
-  if (c.includes('dex') || c.includes('yield') || c.includes('liquidity manager') || c.includes('leveraged farm') || c.includes('farm')) return 'liquidity mining and fee rewards';
-  if (c.includes('bridge')) return 'bridge fee rebates';
-  if (c.includes('staking') || c.includes('restak')) return 'staking yield';
-  if (c.includes('perpetual') || c.includes('derivative') || c.includes('basis')) return 'trading fee rebates';
-  if (c.includes('prediction')) return 'market payouts';
-  if (c.includes('curator') || c.includes('allocator')) return 'vault yield';
-  if (c.includes('stable')) return 'stability fees';
-  if (c.includes('rwa')) return 'yield payouts';
-  if (c.includes('insurance')) return 'cover rewards';
-  if (c.includes('chain')) return 'ecosystem points';
-  if (c.includes('payment') || c.includes('card')) return 'cashback';
-  if (c.includes('governance')) return 'governance rewards';
+  if (c.includes('uncollateralized')) return 'lending yield';
+  if (c.includes('collateral')) return 'restaking yield';
+  if (c.includes('lend')) return 'supply and borrow rewards';
+  if (c.includes('yield') || c.includes('liquidity manager') || c.includes('leveraged farm')) return 'yield';
   if (c.includes('index')) return 'index yield';
+  if (c.includes('dex') || c.includes('farm')) return 'liquidity mining and fee rewards';
+  if (c.includes('bridge')) return 'transfer fees';
+  if (c.includes('staking') || c.includes('restak')) return 'staking yield';
+  if (c.includes('basis')) return 'basis yield';
+  if (c.includes('perpetual') || c.includes('derivative')) return 'trading fee rebates';
+  if (c.includes('prediction')) return 'market payouts';
+  if (c.includes('curator') || c.includes('allocator')) return 'yield';
+  if (c.includes('stable')) return 'yield';
+  if (c.includes('rwa')) return 'yield payouts';
+  if (c.includes('insurance')) return 'cover premiums';
+  if (c.includes('chain')) return 'ecosystem points';
+  if (isLightning(p)) return 'routing fees';
+  if (c.includes('payment') || c.includes('card')) return 'cashback';
+  if (c.includes('governance')) return 'BTC yield and emissions';
   if (c.includes('cedefi')) return 'vault yield';
-  if (c.includes('otc')) return 'trading rebates';
-  if (c.includes('btc')) return 'BTC yield';
+  if (c.includes('otc')) return 'trading rewards';
+  if (c.includes('btc')) return 'DeFi yield';
   return 'points or rewards';
 }
 
@@ -689,13 +784,18 @@ function rewardsFor(p: SnapshotProtocol): string {
  * A protocol's farm plan: eight steps, each an action with a cost and a time. The plan is
  * derived from the protocol's own record (category, chains, TVL, age), never from a
  * hand-written list of names. The first step names the chain and the capital, the gas
- * on every step is the chain's own, and the rewards step names the kind of reward the
- * protocol's category earns.
+ * on every step is the chain's own — except a Lightning row's repeat payments, which
+ * are Lightning payments at about $0.01 each, not on-chain transactions — and the
+ * rewards step names the kind of reward the protocol's category earns. One field is
+ * corrected, not modelled: chainOf names Abstract Chain for the protocol the snapshot
+ * lists on Ethereum (see chainOf); it changes no value.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = chainOf(p);
   const capital = capitalFor(p);
   const gas = gasText(gasFor(chain));
+  const lightning = isLightning(p);
+  const payGas = lightning ? gasText(0.01) : gas;
   const hold = holdDaysFor(age);
   const name = p.name;
   const [main, second] = actionsFor(p, capital, chain);
@@ -709,10 +809,10 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: '5 minutes',
     },
     { text: main, cost: `$${capital} of capital and about ${gas} of gas`, time: '15 minutes to set up' },
-    { text: second, cost: `about ${gas} of gas`, time: '10 minutes' },
+    { text: second, cost: `about ${payGas} of gas`, time: '10 minutes' },
     {
       text: weekly,
-      cost: `about ${gas} of gas a week`,
+      cost: `about ${payGas} of gas a week`,
       time: '10 minutes a week',
     },
     {
@@ -721,7 +821,9 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: `${hold} days`,
     },
     {
-      text: `Open ${name}'s rewards page and check the ${rewards} for the ${position}.`,
+      text: lightning
+        ? `Check the routing fees the channel earned this week.`
+        : `Open ${name}'s rewards page and check the ${rewards} for the ${position}.`,
       cost: 'no fee to check, and never pay to claim',
       time: '10 minutes',
     },
