@@ -10,7 +10,7 @@ wrapped, staked or bridged product of a token that already trades, ranks them by
 value the model derives from the snapshot's own figures, and writes a static dashboard with a
 concrete farm plan for every row.
 
-## The model (radar-4)
+## The model (radar-6)
 
 The value formula is unchanged from radar-2. Radar-3 made the farm plans
 concrete: every step's gas is the chain's own (an Ethereum transaction costs
@@ -27,7 +27,23 @@ methodology panel's fallback count is over rows, not categories, and its
 table lists every category on the board with its row count so the count is
 auditable; and the spotlight cards follow the table's filter. The methodology
 panel states how much of the board rests on the global median and computes
-its example multiples from the snapshot instead of writing them in.
+its example multiples from the snapshot instead of writing them in. Radar-5
+fixes the Lightning plan (open a channel, route payments, earn routing fees)
+and prices the cheap chains the board actually runs on (sixteen at $0.05, six
+at $0.50) so no row falls in the $1 default. Radar-6 is a deeper read:
+versioned names are one protocol, not one row each — the board keeps the
+largest version (Aera V3, not V2) and gains ten rows, RocketSwap Anubis V2
+among them at rank 6; the farm plans split by what the protocol actually is —
+vaults get a vault plan (deposit, keep the receipt token, yield compounds)
+instead of a liquidity-pool plan, basis vaults get a deposit-and-hold plan
+instead of a margined trade, restaking and uncollateralized lending get their
+own plans instead of the lending plan's supply-and-borrow steps, and the
+stable, RWA, insurance, governance, staking, bridge, BTC and OTC plans name
+what those products actually pay or do; the live-token tab's search, filters
+and sorting now work; and the methodology panel is captured in a fourth
+screenshot so the category multiples are visible. One snapshot field is
+corrected, not modelled: Abstract lists Ethereum, but its apps run on
+Abstract Chain.
 
 ```
 implied = round( tvl × catMult × sizeMult × growthMult × maturityMult × chainMult )
@@ -51,9 +67,10 @@ recomputes each row from the same figures and shows every multiplier.
 
 ## The board
 
-198 rows: the whole 40-protocol watchlist (the floor, never the ceiling) plus 158
-pre-token protocols below the $50M floor, by the same rule the watchlist uses — no token
-on record, and not a wrapped, staked or bridged product of a token that already trades.
+208 rows: the whole 40-protocol watchlist (the floor, never the ceiling) plus 168
+early rows — every pre-token protocol in the snapshot that is not a wrapped, staked or
+bridged product of a token that already trades. Versioned names count once: the board
+keeps the largest version of each (Aera V3, not V2).
 Live-token protocols are set aside in their own tab with their market caps, never mixed
 into the ranking. Every row carries an 8-step farm plan derived from its category,
 chains, TVL and age, with a cost and a time on each step; the gas on each step is
